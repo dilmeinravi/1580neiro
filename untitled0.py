@@ -50,11 +50,11 @@ import asyncio
 import subprocess
 from vosk import Model, KaldiRecognizer
 import io
-import traceback  # Import traceback
+import traceback
 from telegram.constants import ParseMode
 
-# 1. Telegram Bot Token (замените на свой токен!)
-TELEGRAM_TOKEN = "7733509719:AAFVwYEU9rUeYpw88QaMpLtLetAHs8VGk_M" # Теперь твой токен
+# 1. Telegram Bot Token
+TELEGRAM_TOKEN = "7733509719:AAFVwYEU9rUeYpw88QaMpLtLetAHs8VGk_M"
 
 # 2. Устройство для вычислений (CPU)
 device = torch.device("cpu")
@@ -80,7 +80,7 @@ try:
     print("Модель Vosk успешно загружена.")
 except Exception as e:
     print(f"Ошибка при загрузке модели Vosk: {e}")
-    vosk_model = None  # Set to None if loading fails
+    vosk_model = None
 
 # Вспомогательные функции для обработки аудио
 async def convert_to_wav(input_file: str) -> str | None:
@@ -99,6 +99,9 @@ async def convert_to_wav(input_file: str) -> str | None:
             logging.error(f"FFmpeg error: {stderr.decode()}")
             return None
         return output_file
+    except FileNotFoundError:
+        logging.error("FFmpeg not found. Please install FFmpeg.")
+        return None
     except Exception as e:
         logging.error(f"Error during audio conversion: {e}")
         return None
@@ -118,7 +121,7 @@ async def transcribe_audio(audio_path: str, update: Update, context: CallbackCon
         return None
 
     try:
-        model_path = "/content/vosk/vosk-model-ru-0.10"  # Укажите путь к вашей модели
+        model_path = "/content/vosk/vosk-model-ru-0.10"
         model = Model(model_path)
 
         try:
@@ -132,27 +135,28 @@ async def transcribe_audio(audio_path: str, update: Update, context: CallbackCon
 
         rec = KaldiRecognizer(model, wf.samplerate)
         num_frames = len(wf)
-
         transcription = ""
+        frame_count = 0
 
         # Function to send progress updates
-        async def send_progress_update(frame_num: int):
+        async def send_progress_update(frame_num: int, progress_message_id: int):
             progress = frame_num / num_frames
             progress_bar = create_progress_bar(progress)
             try:
                 await context.bot.edit_message_text(
                     chat_id=update.effective_chat.id,
-                    message_id=progress_message.message_id,
+                    message_id=progress_message_id,
                     text=f"Распознавание речи... {progress_bar}",
-                    parse_mode=ParseMode.MARKDOWN  # Use markdown to send the updates
+                    parse_mode=ParseMode.MARKDOWN
                 )
             except Exception as e:
                 logging.warning(f"Error editing message: {e}")
 
         # Send initial progress message
-        progress_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="Начинаю распознавание речи...\n[----------] 0%")
+        progress_message = await context.bot.send_message(chat_id=update.effective_chat.id,
+                                                        text="Начинаю распознавание речи...\n[----------] 0%")
+        progress_message_id = progress_message.message_id
 
-        frame_count = 0
         while True:
             data = wf.read(4000)  # Read data in 4000 frame chunks
             frame_count += 4000
@@ -169,7 +173,7 @@ async def transcribe_audio(audio_path: str, update: Update, context: CallbackCon
                     transcription += result + " "
 
             if frame_count % 20000 == 0:  # Update progress every 20000 frames
-                await send_progress_update(frame_count)
+                await send_progress_update(frame_count, progress_message_id)
 
         final_result = rec.FinalResult()
         try:
@@ -183,24 +187,24 @@ async def transcribe_audio(audio_path: str, update: Update, context: CallbackCon
 
         try:
             await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=progress_message.message_id,
-                    text=f"Распознавание завершено!\n\nТранскрипция:\n{final_transcription}",
-                    parse_mode=ParseMode.MARKDOWN  # Use markdown to send the updates
-                )
+                chat_id=update.effective_chat.id,
+                message_id=progress_message_id,
+                text=f"Распознавание завершено!\n\nТранскрипция:\n{final_transcription}",
+                parse_mode=ParseMode.MARKDOWN
+            )
         except Exception as e:
             logging.warning(f"Error editing message: {e}")
-
 
         return final_transcription
 
     except Exception as e:
         print(f"Ошибка при распознавании речи: {e}")
-        traceback.print_exc()  # Print the traceback
+        traceback.print_exc()
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Ошибка при распознавании речи: {e}")
         return None
 
 def split_text_by_sentences(text, max_message_length=4096):
+    """Разделяет текст на сообщения по предложениям."""
     sentences = sent_tokenize(text)
     messages = []
     current_message = ""
@@ -217,12 +221,13 @@ def split_text_by_sentences(text, max_message_length=4096):
 
     return messages
 
-# Telegram Bot Handlers
 async def start(update: Update, context: CallbackContext):
+    """Sends a welcome message."""
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                     text="Привет! Отправьте мне аудиофайл, и я попробую его расшифровать.")
 
 async def audio_message_handler(update: Update, context: CallbackContext):
+    """Handles incoming audio messages."""
     chat_id = update.effective_chat.id
 
     if update.message and update.message.audio:
@@ -230,7 +235,6 @@ async def audio_message_handler(update: Update, context: CallbackContext):
 
         try:
             file_id = audio_file.file_id
-
             new_file = await context.bot.get_file(file_id)
             file_path = new_file.file_path
 
@@ -249,11 +253,12 @@ async def audio_message_handler(update: Update, context: CallbackContext):
                                                 text="Ошибка при преобразовании аудио.")
                 return
 
-            transcription = await transcribe_audio(wav_filename, update, context)
+            transcription_task = asyncio.create_task(transcribe_audio(wav_filename, update, context))
+            transcription = await transcription_task
 
             if transcription:
-               # transcription is already sent in transcribe_audio
-               pass
+                # transcription is already sent in transcribe_audio
+                pass
             else:
                 await context.bot.send_message(chat_id=chat_id,
                                                  text="Не удалось выполнить транскрипцию.")
@@ -261,12 +266,12 @@ async def audio_message_handler(update: Update, context: CallbackContext):
             try:
                 os.remove(audio_filename)
                 os.remove(wav_filename)
-            except Exception as e:
+            except OSError as e:
                 logging.warning(f"Не удалось удалить временные файлы: {e}")
 
         except Exception as e:
             logging.error(f"Ошибка при обработке аудио: {e}")
-            traceback.print_exc()  # Print the traceback
+            traceback.print_exc()
             await context.bot.send_message(chat_id=chat_id,
                                              text=f"Произошла ошибка при обработке аудио: {e}")
 
@@ -274,30 +279,62 @@ async def audio_message_handler(update: Update, context: CallbackContext):
         await context.bot.send_message(chat_id=chat_id,
                                          text="Пожалуйста, отправьте аудиофайл.")
 
+async def help_command(update: Update, context: CallbackContext):
+    """Displays info on how to use the bot."""
+    await update.message.reply_text("Используйте /start чтобы начать работу с ботом. Просто отправьте аудиофайл, и я попробую его расшифровать.")
+
+async def error_handler(update: Update, context: CallbackContext):
+    """Log the error and send a telegram message to notify the developer."""
+    # Log the error before we do anything else, so we can see it even when the bot
+    # encounters an error.
+    logging.error(msg="Exception while handling an update:", exc_info=context.error)
+
+    # Traceback
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = ''.join(tb_list)
+
+    # Build the message with traceback
+    message = (
+        f"An exception was raised while handling an update:\n"
+        f"<pre>language-python\n{tb_string}</pre>"
+    )
+    # Send the message to the user
+    await context.bot.send_message(chat_id=714283924, text=message, parse_mode=ParseMode.HTML) # Замени на свой chat_id
+
+async def post_init(application: Application) -> None:
+    """Post init hook for settings up the bot."""
+    await application.bot.set_my_commands([
+        ("start", "Начать работу с ботом"),
+        ("help", "Получить справку"),
+    ])
+
 async def main() -> None:
+    """Run the bot."""
     try:
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        application = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
         application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
         application.add_handler(MessageHandler(filters.AUDIO, audio_message_handler))
+        application.add_error_handler(error_handler)
 
         # Run the bot until the user presses Ctrl-C
         await application.run_polling(allowed_updates=Update.ALL_TYPES)
+
     except Exception as e:
         print(f"Бот остановлен из-за ошибки: {e}")
         traceback.print_exc()
 
-# Proper startup
+# Запуск бота
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                        level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
     try:
         asyncio.run(main())
     except RuntimeError as e:
         if "This event loop is already running" in str(e):
-            print("Event loop is already running. Attempting to run main() as a task.")
+            print("Event loop is already running. Создаем задачу для main().")
             loop = asyncio.get_event_loop()
-            loop.create_task(main()) # Schedule main to be run on the existing loop
+            loop.create_task(main())
         else:
-            print(f"An error occurred: {e}")
+            print(f"Произошла ошибка: {e}")
             traceback.print_exc()
