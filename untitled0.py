@@ -299,7 +299,7 @@ async def error_handler(update: Update, context: CallbackContext):
         f"<pre>language-python\n{tb_string}</pre>"
     )
     # Send the message to the user
-    await context.bot.send_message(chat_id=714283924, text=message, parse_mode=ParseMode.HTML) # Замени на свой chat_id
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=message, parse_mode=ParseMode.HTML)
 
 async def post_init(application: Application) -> None:
     """Post init hook for settings up the bot."""
@@ -311,7 +311,7 @@ async def post_init(application: Application) -> None:
 async def main() -> None:
     """Run the bot."""
     try:
-        application = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+        application = Application.builder().token(TELEGRAM_TOKEN).allowed_updates=[Update.MESSAGE, Update.CHANNEL_POST, Update.CALLBACK_QUERY].post_init(post_init).build()
 
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
@@ -319,7 +319,7 @@ async def main() -> None:
         application.add_error_handler(error_handler)
 
         # Run the bot until the user presses Ctrl-C
-        await application.run_polling(allowed_updates=Update.ALL_TYPES)
+        await application.run_polling()
 
     except Exception as e:
         print(f"Бот остановлен из-за ошибки: {e}")
@@ -338,3 +338,4 @@ if __name__ == '__main__':
         else:
             print(f"Произошла ошибка: {e}")
             traceback.print_exc()
+
